@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Seller</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="common.js"></script>
+<style>
+#smap{height:360px}#drones{min-height:90px}
+.badge{display:inline-block;color:#fff;padding:2px 8px;border-radius:10px;font-size:12px;font-weight:bold}
+.new{border-left-width:6px}
+.rxph{max-width:160px;max-height:120px;border:1px solid #ccc;border-radius:4px;cursor:pointer;display:block;margin:4px 0}
+.acc{background:#2e7d32}.rej{background:#455a64}
+.drone-ico{font-size:30px;line-height:30px;text-align:center}
+#big{display:none;position:fixed;inset:0;background:#000c;z-index:9999;align-items:center;justify-content:center}
+#big img{max-width:92%;max-height:92%;border-radius:6px}
+.small{width:auto!important;padding:3px 8px!important;margin:2px!important}
+.grey{background:#455a64!important}.blue{background:#1976d2!important}
+#addMsg{min-height:20px;margin-top:6px;font-size:13px}
+</style></head>
+<body>
+<div class="top"><b>💊 Seller Dashboard</b>
+  <span><span id="who"></span> &nbsp; <a href="#" onclick="logout()" style="color:#fff">Logout</a></span></div>
+<div id="big" onclick="this.style.display='none'"><img id="bigImg"></div>
+<div class="wrap">
+  <div class="col">
+    <div class="box"><h3>Weather</h3><button id="rainBtn" onclick="toggleRain()">Simulate rain</button></div>
+    <div class="box"><h3>Drones</h3><div id="drones"></div></div>
+    <div class="box"><h3>Messages</h3><div id="notes"></div></div>
+  </div>
+  <div class="col" style="flex:2">
+    <div class="box"><h3>Live drone map</h3><div id="smap"></div></div>
+    <div class="box"><h3>New orders - choose which to accept (most urgent first)</h3><div id="pending"></div></div>
+    <div class="box"><h3>Accepted and past orders</h3><div id="orderList"></div></div>
+  </div>
+  <div class="col" style="flex:2">
+    <div class="box"><h3>Manage medicines</h3>
+      <input id="q" placeholder="Search medicine..." oninput="render()">
+      <div id="stock"></div></div>
+
+    <div class="box"><h3>➕ Add new medicine</h3>
+      <input id="nn" placeholder="Medicine name">
+      <input id="nc" list="cats" placeholder="Category (pick or type a new one)">
+      <datalist id="cats">
+        <option>Fever and Pain</option><option>First Aid</option><option>Allergy</option>
+        <option>Cold and Cough</option><option>Stomach</option><option>Vitamins</option>
+        <option>Diabetes</option><option>Heart and BP</option><option>Asthma</option>
+        <option>Antibiotics</option><option>Emergency</option><option>Eye Care</option>
+        <option>Skin Care</option>
+      </datalist>
+      <input id="nd" placeholder="Short description (for example Eye drops for dry eyes)">
+      <select id="ni">
+        <option value="💊">💊 Tablet</option><option value="💉">💉 Injection</option>
+        <option value="🍯">🍯 Syrup</option><option value="🧴">🧴 Cream or liquid</option>
+        <option value="👁️">👁️ Eye drops</option><option value="🩹">🩹 First aid</option>
+        <option value="🫁">🫁 Inhaler</option><option value="🍊">🍊 Vitamin</option>
+      </select>
+      <input id="np" type="number" min="1" placeholder="Price (₹)">
+      <input id="ns" type="number" min="0" placeholder="Stock quantity">
+      <select id="nr"><option value="0">No prescription needed</option><option value="1">Prescription photo needed</option></select>
+      <button onclick="addMed()">Add medicine</button>
+      <div id="addMsg"></div></div>
+  </div>
+</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+guard("seller");
+$("who").textContent = localStorage.name;
+let meds = [], rainOn = false, orders = [];
+const RANK = { critical: 0, high: 1, normal: 2 };
+const COLOR = { critical: "#c62828", high: "#ef6c00", normal: "#1976d2" };
+const droneIcon = (busy) => L.divIcon({ className: "drone-ico", html: busy ? "🚁" : "🛸", iconSize: [30, 30], iconAnchor: [15, 15] });
+
+// ---------- Live map ----------
+const map = L.map("smap").setView([17.39, 78.49], 12);
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png").addTo(map);
+const droneMk = {}, destMk = {}, lines = {}, trails = {};
+let fitted = false;
+
+function updateMap(drones) {
+  drones.forEach((d) => {
+    const busy = d.status != "available", pos = [d.lat, d.lng];
+    if (!droneMk[d.id]) droneMk[d.id] = L.marker(pos, { icon: droneIcon(busy) }).addTo(map)
+      .bindTooltip(d.id, { permanent: true, direction: "bottom" });
+    else droneMk[d.id].setLatLng(pos);
+    droneMk[d.id].setIcon(droneIcon(busy));
+  });
+  const flying = orders.filter((o) => ["Drone assigned", "In Flight", "Delayed (rain)"].includes(o.status));
+  const active = orders.filter((o) => !["Delivered", "Rejected"].includes(o.status));
+
+  Object.keys(destMk).forEach((id) => {
+    if (!active.find((o) => o.id == id)) { map.removeLayer(destMk[id]); delete destMk[id]; }
+  });
+  active.forEach((o) => {
+    if (!destMk[o.id]) destMk[o.id] = L.marker([o.address.lat, o.address.lng]).addTo(map)
+      .bindTooltip("Order #" + o.id + " - " + o.address.label);
+  });
+
+  Object.keys(lines).forEach((id) => {
+    if (!flying.find((o) => o.id == id)) {
+      map.removeLayer(lines[id]); delete lines[id];
+      map.removeLayer(trails[id]); delete trails[id];
+    }
+  });
+  flying.forEach((o) => {
+    const d = drones.find((x) => x.id == o.droneId);
+    if (!d) return;
+    const pos = [d.lat, d.lng], dest = [o.address.lat, o.address.lng];
+    if (!lines[o.id]) {
+      lines[o.id] = L.polyline([pos, dest], { color: "#d32f2f", weight: 2, dashArray: "6 8" }).addTo(map);
+      trails[o.id] = L.polyline([pos], { color: "#1976d2", weight: 4 }).addTo(map);
+    } else {
+      lines[o.id].setLatLngs([pos, dest]);
+      trails[o.id].addLatLng(pos);
+    }
+  });
+
+  if (!fitted && drones.length) {
+    fitted = true;
+    map.fitBounds(drones.map((d) => [d.lat, d.lng]), { padding: [60, 60], maxZoom: 14 });
+  }
+}
+async function pollDrones() {
+  const dr = await api("/api/drones");
+  updateMap(dr);
+  setHTML("drones", dr.map((d) =>
+    `<div class="card">${d.id} | ${d.status} | battery ${Math.round(d.battery)}%</div>`).join(""));
+}
+
+// ---------- Orders ----------
+function photo(o) {
+  if (!o.rx) return "";
+  const who = o.rx.doctor ? "Dr " + esc(o.rx.doctor) : "doctor not named";
+  if (!o.rx.photo) return `<br>Prescription: ${who} - no photo (old order)`;
+  const src = API + "/api/orders/" + o.id + "/photo?token=" + localStorage.token;
+  return `<br>Prescription (${who}) - ${o.rx.status}:<img class="rxph" src="${src}" onclick="zoom('${src}')">`;
+}
+function zoom(src) { $("bigImg").src = src; $("big").style.display = "flex"; }
+
+function orderCard(o, pending) {
+  const border = pending ? `style="border-left-color:${COLOR[o.urgency]}"` : "";
+  return `<div class="card ${pending ? "new" : ""}" ${border}>
+    <span class="badge" style="background:${COLOR[o.urgency]}">${o.urgency.toUpperCase()}</span>
+    <b>#${o.id}</b> | <b>${esc(o.status)}</b> | ${new Date(o.createdAt).toLocaleTimeString()}<br>
+    ${o.items.map((i) => esc(i.name) + " x" + i.qty).join(", ")}<br>
+    Customer: ${esc(o.customerName)}, ${esc(o.phone)}<br>
+    Deliver to: ${esc(o.address.label)} - ${esc(o.address.text)}<br>
+    Payment: ${o.payment.method} - ${o.payment.status} (₹${o.total})
+    ${photo(o)}
+    ${pending ? `<br><button class="acc" onclick="decide(${o.id},'accept')">✔ Accept order</button>
+      <button class="rej" onclick="decide(${o.id},'reject')">✖ Reject</button>` : ""}
+    ${o.payment.method == "cod" && o.status == "Delivered" && o.payment.status == "pending"
+      ? `<button onclick="cash(${o.id})">Cash collected</button>` : ""}
+  </div>`;
+}
+
+async function refresh() {
+  const [m, os, w] = await Promise.all([api("/api/medicines"), api("/api/orders"), api("/api/weather")]);
+  meds = m; orders = os; rainOn = w.rain;
+  setHTML("rainBtn", rainOn ? "Rain is ON - click to clear" : "Simulate rain");
+  render();
+  const pend = os.filter((o) => o.status == "Awaiting pharmacy acceptance")
+    .sort((a, b) => RANK[a.urgency] - RANK[b.urgency] || a.id - b.id);
+  setHTML("pending", pend.map((o) => orderCard(o, true)).join("") || "No new orders waiting.");
+  setHTML("orderList", os.filter((o) => o.status != "Awaiting pharmacy acceptance").reverse()
+    .map((o) => orderCard(o, false)).join("") || "Nothing yet.");
+}
+async function decide(id, kind) {
+  let body = {};
+  if (kind == "reject") {
+    const r = prompt("Reason for rejecting (the customer will see this):", "");
+    if (r === null) return;
+    body.reason = r;
+  }
+  try { await api("/api/orders/" + id + "/" + kind, "POST", body); } catch (e) { alert(e.message); }
+  refresh(); pollNotes();
+}
+async function cash(id) { await api("/api/orders/" + id + "/cash", "POST"); refresh(); }
+
+// ---------- Medicines: list, add, edit, remove ----------
+function render() {
+  const q = $("q").value.toLowerCase();
+  const list = meds.filter((m) => (m.name + m.category).toLowerCase().includes(q));
+  setHTML("stock", `<p style="font-size:13px;color:#555">${list.length} medicines</p>
+    <table><tr><th>Medicine<th>Type<th>Price<th>Stock<th>Status<th>Actions</tr>` +
+    list.map((m) => {
+      const s = m.stock == 0 ? '<span class="out">OUT OF STOCK</span>'
+        : m.stock <= m.low ? '<span class="low">LOW - reorder</span>' : "OK";
+      return `<tr><td>${m.icon || ""} ${esc(m.name)}<br><small style="color:#777">${esc(m.category)}</small>
+        <td>${m.rx ? "Rx" : "OTC"}<td>₹${m.price}<td>${m.stock}<td>${s}
+        <td><button class="small" onclick="restock(${m.id})">+20</button>
+        <button class="small blue" onclick="editMed(${m.id})">Edit</button>
+        <button class="small grey" onclick="delMed(${m.id})">Remove</button>`;
+    }).join("") + "</table>");
+}
+async function restock(id) {
+  try { await api("/api/medicines/" + id + "/restock", "POST"); } catch (e) { alert(e.message); }
+  refresh();
+}
+async function editMed(id) {
+  const m = meds.find((x) => x.id == id);
+  if (!m) return;
+  const p = prompt("New price (₹) for " + m.name + ":", m.price);
+  if (p === null) return;
+  const s = prompt("New stock quantity for " + m.name + ":", m.stock);
+  if (s === null) return;
+  try { await api("/api/medicines/" + id, "PUT", { price: +p, stock: +s }); }
+  catch (e) { alert("Could not save: " + e.message); }
+  refresh();
+}
+async function delMed(id) {
+  const m = meds.find((x) => x.id == id);
+  if (!confirm("Remove " + (m ? m.name : "this medicine") + " from the shop?\nCustomers will no longer see it.")) return;
+  try { await api("/api/medicines/" + id, "DELETE"); } catch (e) { alert("Could not remove: " + e.message); }
+  refresh();
+}
+async function addMed() {
+  const msg = $("addMsg");
+  try {
+    await api("/api/medicines", "POST", {
+      name: $("nn").value.trim(), category: $("nc").value.trim(), desc: $("nd").value.trim(),
+      icon: $("ni").value, price: +$("np").value, stock: +$("ns").value, rx: $("nr").value == "1" });
+    msg.style.color = "#2e7d32";
+    msg.textContent = "Added: " + $("nn").value.trim() + ". Customers can see it now.";
+    ["nn", "nc", "nd", "np", "ns"].forEach((i) => ($(i).value = ""));
+    refresh();
+  } catch (e) { msg.style.color = "#c62828"; msg.textContent = e.message; }
+}
+async function toggleRain() { await api("/api/weather", "POST", { rain: !rainOn }); refresh(); }
+
+function tick() { refresh().catch(() => {}); pollNotes().catch(() => {}); }
+tick(); pollDrones().catch(() => {});
+setInterval(tick, 3000);
+setInterval(() => pollDrones().catch(() => {}), 500);
+</script></body></html>

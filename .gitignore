@@ -2,3 +2,5 @@
 .env
 __pycache__/
 venv/
+backend/store.db
+backend/uploads/

@@ -5,41 +5,41 @@ import time
 
 import paho.mqtt.client as mqtt
 
-# Which drone is this? Default is D1. Run "python simulator.py D2" for drone 2.
 DRONE_ID = sys.argv[1] if len(sys.argv) > 1 else "D1"
-
-# Home base position of each drone
-BASES = {
-    "D1": (17.385, 78.4867),
-    "D2": (17.4, 78.5),
-}
+BASES = {"D1": (17.385, 78.4867), "D2": (17.4, 78.5)}
 BASE_LAT, BASE_LNG = BASES.get(DRONE_ID, (17.385, 78.4867))
 
-# MQTT settings (must match server.js)
 BROKER = "broker.hivemq.com"
 PORT = 1883
 PREFIX = "medicinedrone/chinmayee25"
 COMMAND_TOPIC = f"{PREFIX}/drone/{DRONE_ID}/command"
 TELEMETRY_TOPIC = f"{PREFIX}/drone/{DRONE_ID}/telemetry"
+WEATHER_TOPIC = f"{PREFIX}/weather"
 
-STEPS = 20          # number of moves to reach the destination
-STEP_SECONDS = 1    # seconds between moves
+STEPS = 60           # small moves per trip
+STEP_SECONDS = 0.5   # 60 x 0.5 = 30 seconds per trip
 
-# Current drone state
 lat, lng = BASE_LAT, BASE_LNG
 battery = 95.0 if DRONE_ID == "D1" else 80.0
-
+raining = False
 commands = queue.Queue()
 
 
 def on_connect(client, userdata, flags, reason_code, properties):
     print("Connected to broker:", reason_code)
     client.subscribe(COMMAND_TOPIC)
+    client.subscribe(WEATHER_TOPIC)
     print("Drone", DRONE_ID, "is waiting for orders...")
 
 
 def on_message(client, userdata, msg):
-    commands.put(json.loads(msg.payload.decode()))
+    global raining
+    data = json.loads(msg.payload.decode())
+    if msg.topic == WEATHER_TOPIC:
+        raining = bool(data.get("rain"))
+        print("Rain mode:", raining)
+    else:
+        commands.put(data)
 
 
 def send(client, status, order_id=None):
@@ -59,10 +59,13 @@ def fly(client, to_lat, to_lng, status, order_id):
     global lat, lng, battery
     start_lat, start_lng = lat, lng
     for step in range(1, STEPS + 1):
+        while raining:  # hold position until the rain stops
+            send(client, "delayed", order_id)
+            time.sleep(2)
         fraction = step / STEPS
         lat = start_lat + (to_lat - start_lat) * fraction
         lng = start_lng + (to_lng - start_lng) * fraction
-        battery -= 0.5
+        battery -= 0.2
         send(client, status, order_id)
         time.sleep(STEP_SECONDS)
 
@@ -81,15 +84,14 @@ try:
             continue
 
         order_id = order.get("orderId")
-        dest_lat = order.get("lat")
-        dest_lng = order.get("lng")
-        print("New order", order_id, "-> flying to", dest_lat, dest_lng)
+        print("New order", order_id)
 
-        fly(client, dest_lat, dest_lng, "flying", order_id)
+        fly(client, order["lat"], order["lng"], "flying", order_id)
         send(client, "delivered", order_id)
-        time.sleep(2)
+        time.sleep(3)
 
         fly(client, BASE_LAT, BASE_LNG, "returning", order_id)
+        battery = 95.0  # recharged at base
         send(client, "available", order_id)
         print("Back at base. Waiting for the next order...")
 except KeyboardInterrupt:

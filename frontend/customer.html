@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MAYVEX</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="common.js"></script>
+<style>
+.top a{color:#fff;text-decoration:none;cursor:pointer}
+.chips{margin:8px 0}.chip{display:inline-block;padding:6px 12px;margin:3px;border-radius:16px;background:#fff;border:1px solid #ccc;font-size:13px;cursor:pointer}
+.chip.on{background:#d32f2f;color:#fff;border-color:#d32f2f}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px}
+.med{background:#fff;border:1px solid #ddd;border-radius:8px;padding:12px;min-height:200px}
+.ico{font-size:40px}.sub{font-size:12px;color:#666;margin:3px 0}.price{font-weight:bold;margin:6px 0}
+.rx{color:#c62828;font-size:12px;font-weight:bold}.otc{color:#2e7d32;font-size:12px}
+.step{display:flex;align-items:center;justify-content:space-between}.step button{width:42px}
+.tl{display:flex;margin:8px 0}.st{flex:1;text-align:center;font-size:11px;color:#777}
+.st i{display:block;width:14px;height:14px;border-radius:50%;background:#ccc;margin:0 auto 4px}
+.st.done{color:#2e7d32;font-weight:bold}.st.done i{background:#2e7d32}
+.card.selected{border-color:#d32f2f;background:#fff8f8}
+#rain{display:none;position:fixed;left:0;right:0;bottom:0;z-index:150;background:#e65100;color:#fff;padding:10px 16px;font-weight:bold;text-align:center}
+#trackInfo{height:64px;overflow:hidden}
+#tmap,#amap{height:380px}
+#cartBox{contain:layout}
+.drone-ico{font-size:30px;line-height:30px;text-align:center;transition:transform .5s linear}
+</style></head>
+<body>
+<div class="top" style="gap:10px;flex-wrap:wrap;align-items:center">
+  <b style="font-size:18px">💊 MAYVEX</b>
+  <input id="search" placeholder="Search medicines..." style="max-width:340px;margin:0" oninput="renderShop()">
+  <span style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+    <a onclick="tab('shop')">Shop</a>
+    <a onclick="tab('orders')">My orders</a>
+    <a onclick="tab('addr')">Addresses</a>
+    <a onclick="toggleCart()">🛒 Cart (<span id="cartCount">0</span>)</a>
+    <span id="who"></span><a onclick="logout()">Logout</a>
+  </span>
+</div>
+<div id="rain">🌧 Rain alert: deliveries may be delayed because of bad weather.</div>
+
+<!-- SHOP -->
+<div id="shop" class="wrap" style="display:block">
+  <div id="chips" class="chips"></div>
+  <div id="grid" class="grid"></div>
+</div>
+
+<!-- ORDERS AND TRACKING -->
+<div id="orders" class="wrap" style="display:none">
+  <div class="col">
+    <div class="box"><h3>Messages</h3><div id="notes"></div></div>
+    <div class="box"><h3>My orders</h3><div id="orderList"></div></div>
+  </div>
+  <div class="col" style="flex:2">
+    <div class="box"><h3>Live tracking</h3>
+      <div id="trackInfo">Select an order and click Track.</div>
+      <div id="tmap"></div></div>
+  </div>
+</div>
+
+<!-- ADDRESSES -->
+<div id="addr" class="wrap" style="display:none">
+  <div class="col">
+    <div class="box"><h3>Saved addresses</h3><div id="addrList"></div></div>
+    <div class="box"><h3>Add new address</h3>
+      <input id="alabel" placeholder="Name (Home, Work...)">
+      <input id="atext" placeholder="Full address, landmark">
+      <button style="background:#455a64" onclick="locate()">📍 Use my current location</button>
+      <p id="pickTxt" style="font-size:13px">Or click on the map to set the exact location.</p>
+      <button onclick="saveAddr()">Save address</button>
+    </div>
+  </div>
+  <div class="col" style="flex:2"><div class="box"><div id="amap"></div></div></div>
+</div>
+
+<!-- CART -->
+<div id="cartBox" style="display:none;position:fixed;right:0;top:0;bottom:0;width:340px;background:#fff;box-shadow:-3px 0 10px #0004;z-index:200;overflow-y:scroll;padding:14px;box-sizing:border-box">
+  <b style="font-size:18px">Your cart</b>
+  <a href="#" onclick="toggleCart();return false" style="float:right">Close</a>
+  <div id="cartItems"></div>
+  <h3>Total: ₹<span id="total">0</span></h3>
+  <label>Deliver to</label>
+  <select id="addrSel"></select>
+  <a href="#" onclick="toggleCart();tab('addr');return false" style="font-size:13px">+ Add new address</a>
+  <div id="rxBox" style="display:none;border:1px solid #c62828;border-radius:6px;padding:8px;margin-top:8px">
+    <p style="color:#c62828;font-size:13px;margin:0">Your cart has prescription medicines. Upload a clear photo of the doctor's prescription. The pharmacy will check it before accepting.</p>
+    <input id="doctor" placeholder="Doctor name (optional)">
+    <input id="rxfile" type="file" accept="image/*" onchange="pickPhoto(this)">
+    <img id="rxPrev" style="max-width:100%;margin-top:6px;display:none;border-radius:4px">
+  </div>
+  <label>Urgency</label>
+  <select id="urg"><option value="critical">Critical</option><option value="high">High</option><option value="normal">Normal</option></select>
+  <label>Payment</label>
+  <select id="pay"><option value="cod">Cash on delivery</option><option value="online">Online payment</option></select>
+  <button onclick="place()">Place order</button>
+  <div id="cmsg" style="color:#c62828;margin-top:6px;min-height:20px"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+guard("customer");
+$("who").textContent = localStorage.name;
+const TILES = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+let meds = [], me = { addresses: [] }, cat = "All", sel = null, needsRx = false, rxPhoto = "";
+let cart = JSON.parse(localStorage.cart || "{}");
+const saveCart = () => { localStorage.cart = JSON.stringify(cart); };
+const droneIcon = () => L.divIcon({ className: "drone-ico", html: "🚁", iconSize: [30, 30], iconAnchor: [15, 15] });
+
+function tab(n) {
+  ["shop", "orders", "addr"].forEach((t) => ($(t).style.display = t == n ? "block" : "none"));
+  if (n == "orders") { initTrack(); pollTrack().catch(() => {}); }
+  if (n == "addr") initAddrMap();
+}
+function toggleCart() { $("cartBox").style.display = $("cartBox").style.display == "none" ? "block" : "none"; }
+
+// ---------- Prescription photo ----------
+function pickPhoto(inp) {
+  const f = inp.files[0];
+  if (!f) return;
+  const img = new Image();
+  img.onload = () => {
+    const s = Math.min(1, 900 / Math.max(img.width, img.height));
+    const c = document.createElement("canvas");
+    c.width = Math.round(img.width * s); c.height = Math.round(img.height * s);
+    c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+    rxPhoto = c.toDataURL("image/jpeg", 0.7);
+    $("rxPrev").src = rxPhoto; $("rxPrev").style.display = "block";
+    URL.revokeObjectURL(img.src);
+  };
+  img.src = URL.createObjectURL(f);
+}
+
+// ---------- Shop ----------
+function setCat(i) { cat = i; renderShop(); }
+function renderShop() {
+  const q = $("search").value.toLowerCase();
+  const cats = ["All", ...new Set(meds.map((m) => m.category))];
+  setHTML("chips", cats.map((c) =>
+    `<span class="chip ${c == cat ? "on" : ""}" onclick="setCat('${c}')">${esc(c)}</span>`).join(""));
+  const list = meds.filter((m) => (cat == "All" || m.category == cat) &&
+    (m.name + m.desc + m.category).toLowerCase().includes(q));
+  setHTML("grid", list.map((m) => {
+    const n = cart[m.id] || 0;
+    const btn = !m.available ? `<button disabled style="background:#999">Out of stock</button>`
+      : n ? `<div class="step"><button onclick="chg(${m.id},-1)">−</button><b>${n}</b><button onclick="chg(${m.id},1)">+</button></div>`
+      : `<button onclick="chg(${m.id},1)">ADD</button>`;
+    return `<div class="med"><div class="ico">${m.icon}</div><b>${esc(m.name)}</b>
+      <div class="sub">${esc(m.desc)}</div>
+      <div class="sub">${m.rx ? '<span class="rx">Prescription photo needed</span>' : '<span class="otc">No prescription</span>'}</div>
+      <div class="price">₹${m.price}</div>${btn}</div>`;
+  }).join("") || "No medicines found.");
+}
+function chg(id, d) {
+  const n = (cart[id] || 0) + d;
+  if (n <= 0) delete cart[id]; else cart[id] = Math.min(n, 10);
+  saveCart(); renderShop(); renderCart();
+}
+function renderCart() {
+  const ids = Object.keys(cart);
+  let total = 0, rx = false;
+  const rows = ids.map((id) => {
+    const m = meds.find((x) => x.id == id);
+    if (!m) return "";
+    total += m.price * cart[id];
+    if (m.rx) rx = true;
+    return `<div class="card">${m.icon} ${esc(m.name)} <span style="float:right">₹${m.price * cart[id]}</span><br>
+          <button onclick="chg(${m.id},-1)">−</button> ${cart[id]} <button onclick="chg(${m.id},1)">+</button>
+      <button onclick="chg(${m.id},-99)" style="background:#455a64">Remove</button></div>`;
+    }).join("");
+  setHTML("cartItems", rows || "Your cart is empty.");
+  $("total").textContent = total;
+  needsRx = rx;
+  $("rxBox").style.display = rx ? "block" : "none";
+  $("cartCount").textContent = ids.reduce((s, i) => s + cart[i], 0);
+}
+async function place() {
+  try {
+    const a = me.addresses.find((x) => x.id == $("addrSel").value);
+    if (!a) throw new Error("Please add and select a delivery address");
+    const items = Object.keys(cart).map((id) => ({ medicineId: +id, qty: cart[id] }));
+    if (!items.length) throw new Error("Your cart is empty");
+    if (needsRx && !rxPhoto) throw new Error("Please upload a photo of your prescription");
+    const o = await api("/api/orders", "POST", { items, urgency: $("urg").value, payment: $("pay").value,
+      doctor: $("doctor").value, rxPhoto: needsRx ? rxPhoto : "", address: a });
+    cart = {}; saveCart(); $("cmsg").textContent = "";
+    rxPhoto = ""; $("rxfile").value = ""; $("rxPrev").style.display = "none";
+    renderShop(); renderCart();
+    $("cartBox").style.display = "none";
+    sel = o.id; selectOrder(o.id);
+    tab("orders");
+    loadOrders(); pollNotes();
+  } catch (e) { $("cmsg").textContent = e.message; }
+}
+
+// ---------- Addresses ----------
+let addrMap, addrPin, pick = { lat: 17.385, lng: 78.4867 }, picked = false;
+function initAddrMap() {
+  if (!addrMap) {
+    addrMap = L.map("amap").setView([pick.lat, pick.lng], 13);
+    L.tileLayer(TILES).addTo(addrMap);
+    addrPin = L.marker([pick.lat, pick.lng]).addTo(addrMap);
+    addrMap.on("click", (e) => setPick(e.latlng.lat, e.latlng.lng));
+  }
+  setTimeout(() => addrMap.invalidateSize(), 100);
+}
+function setPick(lat, lng) {
+  pick = { lat, lng }; picked = true;
+  addrPin.setLatLng([lat, lng]);
+  $("pickTxt").textContent = "Location selected: " + lat.toFixed(4) + ", " + lng.toFixed(4);
+}
+function locate() {
+  initAddrMap();
+  navigator.geolocation.getCurrentPosition((p) => {
+    setPick(p.coords.latitude, p.coords.longitude);
+    addrMap.setView([pick.lat, pick.lng], 16);
+  }, () => alert("Could not get your location. Click on the map instead."));
+}
+async function saveAddr() {
+  try {
+    if (!picked) throw new Error("Click on the map to set the location");
+    await api("/api/addresses", "POST", { label: $("alabel").value, text: $("atext").value, lat: pick.lat, lng: pick.lng });
+    $("alabel").value = $("atext").value = ""; picked = false;
+    $("pickTxt").textContent = "Saved. Click the map to add another.";
+    await loadMe();
+  } catch (e) { alert(e.message); }
+}
+async function delAddr(id) { await api("/api/addresses/" + id, "DELETE"); loadMe(); }
+async function loadMe() {
+  me = await api("/api/me");
+  const cur = $("addrSel").value;
+  $("addrSel").innerHTML = me.addresses.map((a) =>
+    `<option value="${a.id}">${esc(a.label)} - ${esc(a.text)}</option>`).join("") || '<option value="">No address saved</option>';
+  if (cur) $("addrSel").value = cur;
+  setHTML("addrList", me.addresses.map((a) =>
+    `<div class="card"><b>${esc(a.label)}</b><br>${esc(a.text)}<br><button onclick="delAddr(${a.id})">Delete</button></div>`).join("")
+    || "No saved addresses yet.");
+}
+
+// ---------- Orders and tracking ----------
+const STEPS = ["Placed", "Accepted", "Drone assigned", "On the way", "Delivered"];
+const idx = (s) => ({ "Awaiting pharmacy acceptance": 0, "Awaiting payment": 1, "Waiting for drone": 1,
+  "Drone assigned": 2, "In Flight": 3, "Delayed (rain)": 3, "Delivered": 4 }[s] ?? 0);
+function timeline(o) {
+  if (o.status == "Rejected") return '<b style="color:#c62828">Cancelled: the pharmacy could not accept this order</b>';
+  const i = idx(o.status);
+  return '<div class="tl">' + STEPS.map((s, k) => `<div class="st ${k <= i ? "done" : ""}"><i></i>${s}</div>`).join("") + "</div>";
+}
+async function loadOrders() {
+  const os = await api("/api/orders");
+  if (!sel && os.length) sel = os[os.length - 1].id;
+  setHTML("orderList", os.slice().reverse().map((o) =>
+    `<div class="card ${sel == o.id ? "selected" : ""}"><b>#${o.id}</b> ${o.items.map((i) => esc(i.name) + " x" + i.qty).join(", ")}<br>
+    Total ₹${o.total} | ${o.payment.method == "cod" ? "Cash on delivery" : "Online"} (${o.payment.status})<br>
+    Status: <b>${esc(o.status)}</b>${timeline(o)}
+    <button onclick="selectOrder(${o.id})">Track</button>
+    ${o.payment.method == "online" && o.payment.status == "pending" && o.status != "Rejected"
+      ? `<button onclick="payNow(${o.id})">Pay ₹${o.total} now</button>` : ""}</div>`).join("") || "No orders yet.");
+}
+async function payNow(id) { await api("/api/orders/" + id + "/pay", "POST"); loadOrders(); pollNotes(); }
+
+let tmap, tDest, tDrone, tTrail, tLine, fitKey = null;
+function initTrack() {
+  if (!tmap) {
+    tmap = L.map("tmap").setView([17.385, 78.4867], 12);
+    L.tileLayer(TILES).addTo(tmap);
+  }
+  setTimeout(() => tmap.invalidateSize(), 100);
+}
+function clearTrack() {
+  [tDest, tDrone, tTrail, tLine].forEach((l) => l && tmap.removeLayer(l));
+  tDest = tDrone = tTrail = tLine = null; fitKey = null;
+}
+function selectOrder(id) {
+  sel = id;
+  if (tmap) clearTrack();
+  loadOrders(); pollTrack().catch(() => {});
+}
+async function pollTrack() {
+  if (!sel || !tmap || $("orders").style.display == "none") return;
+  const t = await api("/api/orders/" + sel + "/track");
+  const a = t.order.address, st = t.order.status;
+  const dest = [a.lat, a.lng];
+  if (!tDest) tDest = L.marker(dest).addTo(tmap).bindTooltip("Your location");
+  const flying = t.drone && ["Drone assigned", "In Flight", "Delayed (rain)"].includes(st);
+  if (flying) {
+    const pos = [t.drone.lat, t.drone.lng];
+    if (!tDrone) {
+      tDrone = L.marker(pos, { icon: droneIcon() }).addTo(tmap).bindTooltip("Your drone");
+      tTrail = L.polyline([pos], { color: "#1976d2", weight: 4 }).addTo(tmap);
+      tLine = L.polyline([pos, dest], { color: "#d32f2f", weight: 2, dashArray: "6 8" }).addTo(tmap);
+    } else {
+      tDrone.setLatLng(pos);
+      tTrail.addLatLng(pos);
+      tLine.setLatLngs([pos, dest]);
+    }
+  } else if (tDrone) {
+    tmap.removeLayer(tDrone); tmap.removeLayer(tTrail); tmap.removeLayer(tLine);
+    tDrone = tTrail = tLine = null;
+  }
+  // Fit the map once per stage; it then stays still while the drone moves
+  const key = sel + ":" + (flying ? "fly" : "no");
+  if (fitKey !== key) {
+    fitKey = key;
+    if (flying) tmap.fitBounds([dest, [t.drone.lat, t.drone.lng]], { padding: [60, 60] });
+    else tmap.setView(dest, 15);
+  }
+  const texts = {
+    "Awaiting pharmacy acceptance": "Waiting for the pharmacy to accept your order.",
+    "Awaiting payment": "Accepted by the pharmacy. Please pay online so the drone can leave.",
+    "Waiting for drone": "Accepted. Waiting for a free drone.",
+    "Drone assigned": "Drone " + (t.drone ? t.drone.id : "") + " is getting ready to fly. Estimated delivery: about " + t.order.etaMin + " min.",
+    "In Flight": t.drone ? `Drone ${t.drone.id} is ${t.distKm} km away. Estimated delivery: about ${t.order.etaMin} min (demo flight: ${t.etaSec} sec left).` : "",
+    "Delayed (rain)": "Delayed by rain. Your drone is waiting safely and will continue when the weather clears.",
+    "Delivered": "Delivered. Thank you!",
+    "Rejected": "The pharmacy could not accept this order.",
+  };
+  setHTML("trackInfo", "<p><b>Order #" + t.order.id + ": " + esc(texts[st] || st) + "</b></p>");
+}
+
+// ---------- Live updates ----------
+async function loadMeds() {
+  meds = await api("/api/medicines");
+  Object.keys(cart).forEach((id) => { if (!meds.find((m) => m.id == id)) delete cart[id]; });
+  saveCart(); renderShop(); renderCart();
+}
+async function weather() {
+  const w = await api("/api/weather");
+  $("rain").style.display = w.rain ? "block" : "none";
+}
+function tick() {
+  loadMeds().catch(() => {}); loadOrders().catch(() => {});
+  pollNotes().catch(() => {}); weather().catch(() => {});
+}
+loadMe().then(loadMeds); tick();
+setInterval(tick, 3000);
+setInterval(() => pollTrack().catch(() => {}), 500);
+</script></body></html>

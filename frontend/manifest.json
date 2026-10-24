@@ -1,0 +1,13 @@
+{
+  "name": "MAYVEX - Emergency Medicine Delivery",
+  "short_name": "MAYVEX",
+  "description": "Medicines delivered by drone",
+  "start_url": "index.html",
+  "scope": ".",
+  "display": "standalone",
+  "background_color": "#b71c1c",
+  "theme_color": "#b71c1c",
+  "icons": [
+    { "src": "logo.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

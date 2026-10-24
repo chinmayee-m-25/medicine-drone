@@ -1,183 +1,42 @@
 <!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Medicine Drone Dashboard</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <style>
-    body { font-family: Arial, sans-serif; margin: 0; display: flex; height: 100vh; }
-    #side { width: 340px; padding: 14px; overflow-y: auto; background: #f4f6f8; box-sizing: border-box; }
-    #map { flex: 1; }
-    h1 { font-size: 20px; margin: 0 0 10px; }
-    h2 { font-size: 15px; margin: 18px 0 6px; }
-    label { display: block; font-size: 13px; margin-top: 8px; }
-    select, input { width: 100%; padding: 6px; box-sizing: border-box; }
-    button { margin-top: 12px; width: 100%; padding: 10px; background: #d32f2f; color: #fff; border: 0; border-radius: 4px; font-size: 15px; cursor: pointer; }
-    .card { background: #fff; border-radius: 4px; padding: 8px; margin-bottom: 6px; font-size: 13px; border: 1px solid #ddd; }
-    #msg { margin-top: 8px; font-size: 13px; }
-    .hint { font-size: 12px; color: #555; }
-  </style>
-</head>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MAYVEX</title><script src="common.js"></script></head>
 <body>
-  <div id="side">
-    <h1>Emergency Medicine Drone</h1>
-
-    <h2>Request medicine</h2>
-    <p class="hint">Click on the map to choose the delivery location.</p>
-
-    <label>Medicine</label>
-    <select id="medicine"></select>
-
-    <label>Quantity</label>
-    <input id="quantity" type="number" value="1" min="1" />
-
-    <label>Urgency</label>
-    <select id="urgency">
-      <option value="critical">Critical</option>
-      <option value="high">High</option>
-      <option value="normal">Normal</option>
-    </select>
-
-    <label>Latitude</label>
-    <input id="lat" type="number" step="any" value="17.39" />
-
-    <label>Longitude</label>
-    <input id="lng" type="number" step="any" value="78.49" />
-
-    <button id="send">Send emergency request</button>
-    <div id="msg"></div>
-
-    <h2>Drones</h2>
-    <div id="drones"></div>
-
-    <h2>Orders</h2>
-    <div id="orders"></div>
-
-    <h2>Medicine stock</h2>
-    <div id="stock"></div>
+<div class="top"><b>MAYVEX</b></div>
+<div class="box" style="max-width:380px;margin:30px auto">
+  <h2 id="title">Login</h2>
+  <div id="signupOnly" style="display:none">
+    <input id="name" placeholder="Full name">
+    <input id="phone" placeholder="Phone number">
   </div>
-
-  <div id="map"></div>
-
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script>
-    const API = "http://localhost:5001";
-
-    // Map
-    const map = L.map("map").setView([17.39, 78.49], 13);
-    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution: "&copy; OpenStreetMap contributors",
-    }).addTo(map);
-
-    // Destination marker (click the map to move it)
-    let destMarker = L.marker([17.39, 78.49]).addTo(map).bindTooltip("Delivery location");
-    map.on("click", (e) => {
-      document.getElementById("lat").value = e.latlng.lat.toFixed(5);
-      document.getElementById("lng").value = e.latlng.lng.toFixed(5);
-      destMarker.setLatLng(e.latlng);
-    });
-
-    // Drone markers
-    const droneMarkers = {};
-
-    // Fill the medicine dropdown once
-    async function loadMedicineOptions() {
-      const res = await fetch(API + "/api/medicines");
-      const list = await res.json();
-      const select = document.getElementById("medicine");
-      select.innerHTML = "";
-      list.forEach((m) => {
-        const option = document.createElement("option");
-        option.value = m.id;
-        option.textContent = m.name;
-        select.appendChild(option);
-      });
-    }
-
-    // Refresh live data every second
-    async function refresh() {
-      try {
-        const [drones, orders, medicines] = await Promise.all([
-          fetch(API + "/api/drones").then((r) => r.json()),
-          fetch(API + "/api/orders").then((r) => r.json()),
-          fetch(API + "/api/medicines").then((r) => r.json()),
-        ]);
-
-        // Drones
-        const dronesDiv = document.getElementById("drones");
-        dronesDiv.innerHTML = "";
-        drones.forEach((d) => {
-          const card = document.createElement("div");
-          card.className = "card";
-          card.textContent = d.id + " | " + d.status + " | battery " + d.battery + "%";
-          dronesDiv.appendChild(card);
-
-          const pos = [d.lat, d.lng];
-          if (!droneMarkers[d.id]) {
-            droneMarkers[d.id] = L.circleMarker(pos, {
-              radius: 10, color: "#0d47a1", fillColor: "#2196f3", fillOpacity: 0.9,
-            }).addTo(map).bindTooltip(d.id, { permanent: true, direction: "top" });
-          } else {
-            droneMarkers[d.id].setLatLng(pos);
-          }
-        });
-
-        // Orders (newest first)
-        const ordersDiv = document.getElementById("orders");
-        ordersDiv.innerHTML = "";
-        if (orders.length === 0) ordersDiv.textContent = "No orders yet.";
-        orders.slice().reverse().forEach((o) => {
-          const card = document.createElement("div");
-          card.className = "card";
-          card.textContent = "#" + o.id + " | " + o.urgency + " | drone " + o.droneId + " | " + o.status;
-          ordersDiv.appendChild(card);
-        });
-
-        // Stock
-        const stockDiv = document.getElementById("stock");
-        stockDiv.innerHTML = "";
-        medicines.forEach((m) => {
-          const card = document.createElement("div");
-          card.className = "card";
-          card.textContent = m.name + ": " + m.stock;
-          stockDiv.appendChild(card);
-        });
-      } catch (err) {
-        document.getElementById("msg").textContent =
-          "Cannot reach the server. Is 'npm run dev' running in the backend folder?";
-      }
-    }
-
-    // Send the order
-    document.getElementById("send").addEventListener("click", async () => {
-      const body = {
-        medicineId: Number(document.getElementById("medicine").value),
-        quantity: Number(document.getElementById("quantity").value),
-        urgency: document.getElementById("urgency").value,
-        lat: Number(document.getElementById("lat").value),
-        lng: Number(document.getElementById("lng").value),
-      };
-      const msg = document.getElementById("msg");
-      try {
-        const res = await fetch(API + "/api/orders", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        });
-        const data = await res.json();
-        msg.textContent = res.ok
-          ? "Order #" + data.id + " sent. Drone " + data.droneId + " is on the way."
-          : "Error: " + data.error;
-      } catch (err) {
-        msg.textContent = "Cannot reach the server.";
-      }
-      refresh();
-    });
-
-    loadMedicineOptions();
-    refresh();
-    setInterval(refresh, 1000);
-  </script>
-</body>
-</html>
+  <input id="email" placeholder="Email">
+  <input id="password" type="password" placeholder="Password">
+  <button id="btn" onclick="go()">Login</button>
+  <p id="msg" style="color:#c62828;min-height:20px"></p>
+  <a href="#" id="sw" onclick="toggle();return false">New customer? Sign up</a>
+  <p style="font-size:12px;color:#666">Pharmacy staff: login with the seller account you were given.</p>
+</div>
+<script>
+let signup = false;
+function toggle() {
+  signup = !signup;
+  $("signupOnly").style.display = signup ? "block" : "none";
+  $("title").textContent = $("btn").textContent = signup ? "Sign up" : "Login";
+  $("sw").textContent = signup ? "Have an account? Login" : "New customer? Sign up";
+  $("msg").textContent = "";
+}
+async function go() {
+  try {
+    const b = { email: $("email").value.trim(), password: $("password").value };
+    if (signup) Object.assign(b, { name: $("name").value.trim(), phone: $("phone").value.trim() });
+    const d = await api(signup ? "/api/signup" : "/api/login", "POST", b);
+    localStorage.token = d.token; localStorage.role = d.role; localStorage.name = d.name;
+    location = d.role === "seller" ? "seller.html" : "customer.html";
+  } catch (e) {
+    $("msg").textContent = e.message === "Failed to fetch"
+      ? "Cannot reach the server. Is the backend running?" : e.message;
+  }
+}
+// Press Enter in any box to submit
+document.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
+</script></body></html>
