@@ -10,13 +10,15 @@ const nodemailer = require("nodemailer");
 
 const SECRET = process.env.JWT_SECRET || "dev-secret-change-me";
 const PREFIX = "medicinedrone/chinmayee25";
-const FILE = __dirname + "/store.db";
-const UPLOADS = path.join(__dirname, "uploads");
+const DATA = process.env.DATA_DIR || __dirname;
+const FILE = DATA + "/store.db";
+const UPLOADS = path.join(DATA, "uploads");
 const VERSION = 2;
 fs.mkdirSync(UPLOADS, { recursive: true });
 
 const app = express();
 app.use(cors());
+app.use(express.json({ limit: "6mb" }));
 app.use(express.static(path.join(__dirname, "..", "frontend")));
 
 // ---------- Email and SMS ----------
@@ -190,8 +192,7 @@ function tryDispatch() {
       o.start = { lat: d.lat, lng: d.lng };
       o.etaMin = etaMinutes(d, o.address);
       o.status = "Drone assigned";
-      mq.publish(`${PREFIX}/drone/${d.id}/command`,
-        JSON.stringify({ orderId: o.id, lat: o.address.lat, lng: o.address.lng }));
+      sendCommand(d, o);
       notify({ userId: o.customerId }, "flying",
         `Order #${o.id}: drone ${d.id} is assigned. Estimated delivery: about ${o.etaMin} min (around ${clock(o.etaMin)}).`);
       save();
@@ -229,9 +230,8 @@ function markDelivered(o) {
   notify({ role: "seller" }, "delivered", `Order #${o.id} was delivered.`);
 }
 
-mq.on("message", (topic, msg) => {
+function handleTelemetry(t) {
   try {
-    const t = JSON.parse(msg.toString());
     const d = drones.find((x) => x.id === t.droneId);
     if (!d) return;
     Object.assign(d, { lat: t.lat, lng: t.lng, battery: t.battery });
@@ -260,8 +260,48 @@ mq.on("message", (topic, msg) => {
     }
     if (t.status === "available") { d.status = "available"; tryDispatch(); }
     else d.status = "in-flight";
-  } catch (e) { console.log("Bad telemetry:", e.message); }
-});
+    } catch (e) { console.log("Bad telemetry:", e.message); }
+}
+
+// Built-in drones (used online). Set EMBEDDED_DRONES=0 to use the Python simulators instead.
+const EMBEDDED = process.env.EMBEDDED_DRONES !== "0";
+const HOME = { D1: { lat: 17.385, lng: 78.4867 }, D2: { lat: 17.4, lng: 78.5 } };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function flyEmbedded(d, o) {
+  await sleep(1500);
+  const trip = async (to, status) => {
+    const from = { lat: d.lat, lng: d.lng };
+    for (let s = 1; s <= 60; s++) {
+      while (raining) {
+        handleTelemetry({ droneId: d.id, orderId: o.id, lat: d.lat, lng: d.lng, battery: d.battery, status: "delayed" });
+        await sleep(2000);
+      }
+      handleTelemetry({ droneId: d.id, orderId: o.id,
+        lat: from.lat + ((to.lat - from.lat) * s) / 60,
+        lng: from.lng + ((to.lng - from.lng) * s) / 60,
+        battery: d.battery - 0.2, status });
+      await sleep(500);
+    }
+  };
+  await trip(o.address, "flying");
+  handleTelemetry({ droneId: d.id, orderId: o.id, lat: d.lat, lng: d.lng, battery: d.battery, status: "delivered" });
+  await sleep(3000);
+  await trip(HOME[d.id], "returning");
+  handleTelemetry({ droneId: d.id, orderId: o.id, lat: d.lat, lng: d.lng, battery: 95, status: "available" });
+}
+
+function sendCommand(d, o) {
+  if (EMBEDDED) { flyEmbedded(d, o); return; }
+  mq.publish(`${PREFIX}/drone/${d.id}/command`,
+    JSON.stringify({ orderId: o.id, lat: o.address.lat, lng: o.address.lng }));
+}
+
+if (!EMBEDDED) {
+  mq.on("message", (topic, msg) => {
+    try { handleTelemetry(JSON.parse(msg.toString())); } catch (e) { console.log("Bad telemetry:", e.message); }
+  });
+}
 
 // ---------- Login ----------
 const tokenFor = (u) => ({
