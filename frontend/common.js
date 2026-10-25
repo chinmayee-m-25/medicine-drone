@@ -1,4 +1,4 @@
-// On your PC (Live Server) it talks to localhost. When hosted online it uses its own address.
+// On your PC (Live Server) it talks to localhost. Online it uses its own address.
 const API = ["5500", "5501"].includes(location.port) ? "http://localhost:5001" : location.origin;
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => "&#" + c.charCodeAt(0) + ";");
@@ -17,7 +17,12 @@ async function api(path, method = "GET", body) {
     body: body && JSON.stringify(body),
   });
   const d = await r.json();
-  if (r.status === 401) { localStorage.clear(); location = "index.html"; }
+  // Wrong or expired login: go back to the login page
+  if (r.status === 401 || r.status === 403) {
+    localStorage.clear();
+    location = "index.html";
+    throw new Error("Please login again");
+  }
   if (!r.ok) throw new Error(d.error);
   return d;
 }
@@ -88,8 +93,7 @@ function splash() {
 
 function brand() {
   document.title = "MAYVEX";
-  const head = document.head;
-  head.insertAdjacentHTML("beforeend",
+  document.head.insertAdjacentHTML("beforeend",
     `<link rel="manifest" href="manifest.json"><meta name="theme-color" content="#b71c1c">
      <link rel="icon" href="logo.svg" type="image/svg+xml">`);
   const b = document.querySelector(".top b");
